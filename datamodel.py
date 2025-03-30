@@ -3,6 +3,7 @@ from typing import Dict, List
 from json import JSONEncoder
 import jsonpickle
 
+# STARTER CLASSES USED BY IMC
 Time = int
 Symbol = str
 Product = str

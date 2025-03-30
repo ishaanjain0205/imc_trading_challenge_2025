@@ -2,6 +2,8 @@ from imc_trading_challenge_2025.datamodel import OrderDepth, UserId, TradingStat
 from typing import List
 import string
 
+# WORK ON THIS FILE
+# RUN FUNCTION => FUNCTION TO MODIFY, EXECUTES OUR TRADES
 class Trader:
     
     def run(self, state: TradingState):
