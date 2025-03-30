@@ -1,0 +1,10 @@
+docutils==0.21.2
+jsonpickle==4.0.5
+numpy==2.2.4
+pandas==2.2.3
+python-dateutil==2.9.0.post0
+pytz==2025.2
+six==1.17.0
+statistics==1.0.3.5
+typing==3.7.4.3
+tzdata==2025.2
