@@ -1,4 +1,4 @@
-from imc_trading_challenge_2025.datamodel import OrderDepth, UserId, TradingState, Order
+from datamodel import OrderDepth, UserId, TradingState, Order
 from typing import List
 import string
 
