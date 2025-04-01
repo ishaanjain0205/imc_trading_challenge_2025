@@ -15,7 +15,7 @@ class Trader:
             new_data = {}
 
             # Parameters for fair value calculation
-            alpha = 0.1  # Smoothing factor for exponential moving average
+            alpha = 0.2  # Smoothing factor for exponential moving average
 
             # Loop over each product in the market state
             for product in state.order_depths:
