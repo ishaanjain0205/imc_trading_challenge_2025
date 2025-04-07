@@ -185,43 +185,20 @@ class Trader:
         current_position = state.position.get(product, 0)
         max_pos = 50
 
-               # Adjust bid/ask to reduce inventory risk
-        inventory_ratio = current_position / max_pos
-        if inventory_ratio > 0.5:
-            ask_price = min(ask_price, best_ask - 1)
-        elif inventory_ratio < -0.5:
-            bid_price = max(bid_price, best_bid + 1)
+        # Buy only if we can go more long
+        if current_position < max_pos:
+            buyable_qty = min(quantity, max_pos - current_position)
+            if buyable_qty > 0:
+                orders.append(Order(product, int(round(bid_price)), buyable_qty))
 
-        # Generate layered orders
-        def generate_layered_orders(product, bid_price, ask_price, base_quantity, step, layers, max_pos, pos):
-            orders = []
-            qty_per_layer = base_quantity // layers
-
-            # Buy layers
-            buyable = max(0, max_pos - pos)
-            for i in range(layers):
-                price = int(round(bid_price - (i * step)))
-                qty = min(qty_per_layer, buyable)
-                if qty > 0:
-                    orders.append(Order(product, price, qty))
-                    buyable -= qty
-
-            # Sell layers
-            sellable = max(0, pos + max_pos)
-            for i in range(layers):
-                price = int(round(ask_price + (i * step)))
-                qty = min(qty_per_layer, sellable)
-                if qty > 0:
-                    orders.append(Order(product, price, -qty))
-                    sellable -= qty
-
-            return orders
-
-        step_size = max(1, round((best_ask - best_bid) / 4))
-        orders = generate_layered_orders(product, bid_price, ask_price, quantity, step_size, 3, max_pos, current_position)
+        # Sell only if we can go more short
+        if current_position > -max_pos:
+            sellable_qty = min(quantity, current_position + max_pos)
+            if sellable_qty > 0:
+                orders.append(Order(product, int(round(ask_price)), -sellable_qty))
 
         result[product] = orders
-        
+
         traderData = jsonpickle.encode({
             "mid_prices": self.mid_prices,
             "emwa": self.emwa
