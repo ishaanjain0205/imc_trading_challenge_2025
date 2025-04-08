@@ -579,17 +579,17 @@ class Trader:
                 # -----------------------------------------------------------------------
                 # 6) Dynamically set quantity (reducing size in illiquid or highly volatile markets)
                 # -----------------------------------------------------------------------
-                base_quantity = 5
+                base_quantity = 20
                 # We can shrink or grow based on how big rolling_volatility is
                 # E.g. if volatility is bigger than some threshold, reduce quantity
                 if new_rolling_volatility > 5:  # or some threshold you pick
-                    base_quantity = 3
+                    base_quantity = 10
                 elif new_rolling_volatility < 1:
-                    base_quantity = 8
+                    base_quantity = 30
 
                 quantity = base_quantity
                 # Position limit
-                position_limit = 20
+                position_limit = 50
                 max_buy = min(quantity, position_limit - position)
                 max_sell = min(quantity, position_limit + position)
 
