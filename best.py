@@ -499,11 +499,6 @@ class Trader:
         result: Dict[str, List[Order]] = {}
         conversions = 0  # We'll keep this at 0 unless you truly need conversions
 
-        PRECALC_FREQS = [0.00013333333, 0.00006666667, 0.00003333333]
-        PRECALC_AMPS = [405967.39994, 732541.88318, 1000241.25709]
-        PRECALC_PHASES = [-0.58284677, -2.52378785, -1.95510220]
-
-
         for product, order_depth in state.order_depths.items():
             position = state.position.get(product, 0)
             orders: List[Order] = []
@@ -512,33 +507,116 @@ class Trader:
             # SQUID_INK LOGIC (the “last+im+v” approach you gave)
             ###############################################################################
             if product == Product.SQUID_INK:
-                best_bid = max(order_depth.buy_orders.keys(), default=None)
-                best_ask = min(order_depth.sell_orders.keys(), default=None)
+                order_depth: OrderDepth = state.order_depths[product]
+                orders: List[Order] = []
 
+                # Get market order details
+                buy_orders = order_depth.buy_orders
+                sell_orders = order_depth.sell_orders
+
+                # Find the best bid and best ask (if available)
+                best_bid = max(buy_orders.keys()) if buy_orders else None
+                best_ask = min(sell_orders.keys()) if sell_orders else None
+                position = state.position.get(product, 0)
+
+                # Grab or initialize short-term memory from traderData
+                # We'll keep 'last_price' and 'rolling_volatility' in memory
+                memory = memory_state.setdefault("SQUID_INK", {})
+                last_price = memory.get("last_price", 10.0)
+                rolling_volatility = memory.get("rolling_volatility", 0.0)
+                alpha = 0.2  # smoothing factor for volatility
+
+                # -----------------------------------------------------------------------
+                # 1) Compute or fallback to a mid-price
+                # -----------------------------------------------------------------------
                 if best_bid is not None and best_ask is not None:
                     current_price = (best_bid + best_ask) / 2
-                    price_series = memory_state["squid_ink_prices"].get("series", [])
-                    price_series.append(current_price)
-                    if len(price_series) > 256:
-                        price_series = price_series[-256:]
-                    memory_state["squid_ink_prices"]["series"] = price_series
+                else:
+                    # Fallback if no valid best_bid or best_ask
+                    current_price = last_price  # or default to 10 if you prefer
 
-                    # No trend slope logic, just price tracking
-                    bid_price = best_bid
-                    ask_price = best_ask
+                # -----------------------------------------------------------------------
+                # 2) Compute volatility as abs(current - last). Smooth it with rolling_vol
+                # -----------------------------------------------------------------------
+                raw_volatility = abs(current_price - last_price)
+                # Exponential smoothing
+                new_rolling_volatility = alpha * raw_volatility + (1 - alpha) * rolling_volatility
+                # In case we have literally no movement or we are just starting up, ensure a floor
+                new_rolling_volatility = max(new_rolling_volatility, 0.5)
 
-                    quantity = 50
-                    position_limit = self.LIMIT[product]
-                    max_buy = min(quantity, position_limit - position)
-                    max_sell = min(quantity, position_limit + position)
+                # -----------------------------------------------------------------------
+                # 3) Calculate order imbalance from the order depth
+                # -----------------------------------------------------------------------
+                total_bid_vol = sum(buy_orders.values())  # total buy side volume
+                total_ask_vol = -sum(sell_orders.values())  # total sell side volume
+                imbalance = 0
+                if (total_bid_vol + total_ask_vol) > 0:
+                    imbalance = (total_bid_vol - total_ask_vol) / (total_bid_vol + total_ask_vol)
 
-                    if max_buy > 0:
-                        orders.append(Order(product, int(bid_price), max_buy))
-                    if max_sell > 0:
-                        orders.append(Order(product, int(ask_price), -max_sell))
+                # -----------------------------------------------------------------------
+                # 4) Determine spread based on volatility and a minimal tick
+                # -----------------------------------------------------------------------
+                tick_size = 0
+                # You can scale volatility by a factor if you like
+                spread_adjustment = new_rolling_volatility + tick_size
 
-                    memory_state["squid_ink_prices"]["last_price"] = current_price
-                    result[product] = orders
+                # -----------------------------------------------------------------------
+                # 5) Adjust order prices based on imbalance
+                #    If imbalance is large > 0.5, we shift ask higher & bid a bit lower
+                #    If imbalance is < -0.5, we shift bid even lower and ask not as far
+                #    Otherwise we do symmetrical spreads
+                # -----------------------------------------------------------------------
+                if imbalance > 0.5:
+                    ask_price = current_price + (spread_adjustment + tick_size)
+                    bid_price = current_price - spread_adjustment
+                elif imbalance < -0.5:
+                    ask_price = current_price + spread_adjustment
+                    bid_price = current_price - (spread_adjustment + tick_size)
+                else:
+                    ask_price = current_price + spread_adjustment
+                    bid_price = current_price - spread_adjustment
+
+                # -----------------------------------------------------------------------
+                # 6) Dynamically set quantity (reducing size in illiquid or highly volatile markets)
+                # -----------------------------------------------------------------------
+                base_quantity = 5
+                # We can shrink or grow based on how big rolling_volatility is
+                # E.g. if volatility is bigger than some threshold, reduce quantity
+                if new_rolling_volatility > 5:  # or some threshold you pick
+                    base_quantity = 3
+                elif new_rolling_volatility < 1:
+                    base_quantity = 8
+
+                quantity = base_quantity
+                # Position limit
+                position_limit = 20
+                max_buy = min(quantity, position_limit - position)
+                max_sell = min(quantity, position_limit + position)
+
+                # If best_bid or best_ask are None, or if the spread is extremely large,
+                # you might skip or reduce your quotes:
+                if best_bid is None or best_ask is None or (best_ask - best_bid) > 4 * spread_adjustment:
+                    # Post very cautious or no orders
+                    max_buy = min(max_buy, 2)
+                    max_sell = min(max_sell, 2)
+
+                # -----------------------------------------------------------------------
+                # 7) Create orders
+                # -----------------------------------------------------------------------
+                # Round the prices to integer if needed
+                if max_buy > 0:
+                    orders.append(Order(product, int(bid_price), max_buy))
+                if max_sell > 0:
+                    orders.append(Order(product, int(ask_price), -max_sell))
+
+                # -----------------------------------------------------------------------
+                # 8) Update memory
+                # -----------------------------------------------------------------------
+                memory["last_price"] = current_price
+                memory["rolling_volatility"] = new_rolling_volatility
+                memory_state["SQUID_INK"] = memory
+
+                result[product] = orders
 
             ###############################################################################
             # RAINFOREST_RESIN / KELP LOGIC (renamed from AMETHYSTS / STARFRUIT)
