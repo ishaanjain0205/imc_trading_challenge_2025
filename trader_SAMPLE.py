@@ -15,6 +15,11 @@ class Trader:
             order_depth: OrderDepth = state.order_depths[product]
             orders: List[Order] = []
             acceptable_price = 10;  # Participant should calculate this value
+
+
+            bid_price = None # OPTIMAL BID PRICE DYNAMICALLY UPDATED
+            ask_price = None # OPTIMAL ASK PRICE DYNAMICALLY UPDATED
+            
             print("Acceptable price : " + str(acceptable_price))
             print("Buy Order depth : " + str(len(order_depth.buy_orders)) + ", Sell order depth : " + str(len(order_depth.sell_orders)))
     
