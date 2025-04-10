@@ -123,6 +123,101 @@ class Logger:
 
 logger = Logger()
 
+class FourierStrat:
+    """
+    FourierStrat reconstructs a forecast price using precalculated Fourier components
+    and compares it to the current market mid-price. The order quantity is then dynamically
+    adjusted based on how far (in price units) the market price deviates from the forecast.
+    """
+    def __init__(self) -> None:
+        self.name = "FourierStrat"
+        # Precalculated Fourier coefficients for each product
+        self.coeffs = {
+            "RAINFOREST_RESIN": {
+                "freqs": [0.00203033333, 0.00366466667, 0.00282766667, 0.00229533333, 0.00345733333],
+                "amps": [907.63941, 788.20834, 787.95674, 765.0356, 761.65414],
+                "phases": [-1.9201105, 1.2351823, 1.82283202, -1.10805033, -0.99275832],
+                "mean": 10000  # Baseline or fair value for resin
+            },
+            "KELP": {
+                "freqs": [3.3333e-07, 6.6667e-07, 2e-06, 1.66667e-06, 3e-06],
+                "amps": [166550.54165, 103999.2035, 58297.17692, 52297.06026, 45428.60863],
+                "phases": [1.78312627, 1.90075364, 1.11510534, 2.17016315, 1.58262202],
+                "mean": 2000  # Baseline for kelp
+            },
+            "SQUID_INK": {
+                "freqs": [3.3333e-07, 6.6667e-07, 1.33333e-06, 1.66667e-06, 2e-06],
+                "amps": [1000241.25709, 732541.88318, 405967.39994, 313508.62736, 272075.38086],
+                "phases": [-1.9551022, -2.52378785, -0.58284677, -1.53594377, -1.40839279],
+                "mean": 2000  # Baseline for squid ink
+            }
+        }
+        # Parameter: the baseline order quantity when the price deviation equals the threshold.
+        self.base_qty = 1
+        # Parameter: minimal price deviation (in price units) that triggers an order.
+        self.threshold = 5.0
+
+    def load(self, data: dict) -> None:
+        # This strategy doesn't hold dynamic state.
+        pass
+
+    def save(self) -> dict:
+        return {}
+    
+    def run_strategy(
+        self,
+        product: str,
+        order_depth: OrderDepth,
+        position: int,
+        position_limit: int,
+        timestamp: int
+    ) -> List[Order]:
+        # Use Fourier reconstruction only if we have coefficients for this product.
+        if product not in self.coeffs:
+            return []
+        coeff = self.coeffs[product]
+        freqs = coeff["freqs"]
+        amps = coeff["amps"]
+        phases = coeff["phases"]
+        mean = coeff["mean"]
+        
+        # Reconstruct the forecast price using the Fourier series
+        t = timestamp  # assume timestamp is in the expected time unit
+        reconstruction = mean
+        for f, a, ph in zip(freqs, amps, phases):
+            reconstruction += a * np.cos(2 * np.pi * f * t + ph)
+        
+        # Extract current market mid-price from order_depth
+        if order_depth.buy_orders and order_depth.sell_orders:
+            best_bid = max(order_depth.buy_orders.keys())
+            best_ask = min(order_depth.sell_orders.keys())
+            mid = (best_bid + best_ask) / 2.0
+        else:
+            mid = reconstruction  # fallback if order book data is missing
+        
+        orders: List[Order] = []
+        
+        # Calculate available capacity for orders
+        if mid < reconstruction - self.threshold and position < position_limit:
+            # Expect price to revert upward: generate a buy order.
+            available = position_limit - position   # capacity to buy (long)
+            diff = reconstruction - mid              # positive difference (how far below forecast)
+            # Calculate a scaling factor. If diff equals threshold, scaling=1; if larger, scaling>1.
+            scaling = diff / self.threshold
+            qty = int(min(available, self.base_qty * scaling))
+            qty = max(qty, 1)
+            orders.append(Order(product, round(mid), qty))
+        elif mid > reconstruction + self.threshold and position > -position_limit:
+            # Expect price to revert downward: generate a sell order.
+            available = position + position_limit    # capacity to sell (short)
+            diff = mid - reconstruction                # positive difference (how far above forecast)
+            scaling = diff / self.threshold
+            qty = int(min(available, self.base_qty * scaling))
+            qty = max(qty, 1)
+            orders.append(Order(product, round(mid), -qty))
+        
+        return orders
+
 # old resin logic - clearly fucked something up 
 
 class RainforestResinStrat:
@@ -658,6 +753,7 @@ class lastImbVol:
 
 
 # mean reversion approach
+# trading strategy 
 class meanRev:
     def __init__(self):
         self.name = "meanRev"
@@ -1340,18 +1436,21 @@ class Trader:
             "RAINFOREST_RESIN": [
                 RainforestResinStrat(),
                 checkArb(),
+                # FourierStrat()
                 # captureBidAskSpread(),
             ],
             "KELP": [
                 checkArb(),
+                # FourierStrat(),
                 # possibly combine multiple - cant figure out
                 # KelpStratOne(),  # "take-clear-make" style with reversion
                 # meanRev(),
                 KelpStratTwo()   # "popular buy/sell" approach with pinned logic
             ],
             "SQUID_INK": [
-                checkArb(),
-                combinedSquidInkStrategy()
+                # checkArb(),
+                # combinedSquidInkStrategy(),
+                FourierStrat()
                 # checkSeasonSquidInk(),
                 # lastImbVol()
             ],
