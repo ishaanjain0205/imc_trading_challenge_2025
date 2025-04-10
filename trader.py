@@ -120,103 +120,159 @@ class Logger:
 
         return value[: max_length - 3] + "..."
 
-
 logger = Logger()
 
 class FourierStrat:
     """
-    FourierStrat reconstructs a forecast price using precalculated Fourier components
-    and compares it to the current market mid-price. The order quantity is then dynamically
-    adjusted based on how far (in price units) the market price deviates from the forecast.
+    A revised FourierStrat that:
+      1) Reconstructs a forecast price via Fourier (same as before).
+      2) Tracks mid-price changes from the last tick.
+      3) Computes a rolling Z-score of recent mid-price differences.
+      4) Trades *only if* the Fourier signal and the high |Z-score| indicate a likely snap-back (reversion).
     """
+
     def __init__(self) -> None:
         self.name = "FourierStrat"
-        # Precalculated Fourier coefficients for each product
+        # Precalculated Fourier coefficients for each product (same as your original)
         self.coeffs = {
             "RAINFOREST_RESIN": {
-                "freqs": [0.00203033333, 0.00366466667, 0.00282766667, 0.00229533333, 0.00345733333],
-                "amps": [907.63941, 788.20834, 787.95674, 765.0356, 761.65414],
-                "phases": [-1.9201105, 1.2351823, 1.82283202, -1.10805033, -0.99275832],
-                "mean": 10000  # Baseline or fair value for resin
+                "freqs": [3.3333e-07, 6.6667e-07, 1.33333e-06, 1.66667e-06, 2e-06],
+                "amps": [33.34138, 24.41806, 13.53225, 10.45029, 9.06918],
+                "phases": [1.9551022, 2.52378785, 0.58284677, 1.53594377, 1.40839279],
+                "mean": 10000
             },
             "KELP": {
                 "freqs": [3.3333e-07, 6.6667e-07, 2e-06, 1.66667e-06, 3e-06],
                 "amps": [166550.54165, 103999.2035, 58297.17692, 52297.06026, 45428.60863],
                 "phases": [1.78312627, 1.90075364, 1.11510534, 2.17016315, 1.58262202],
-                "mean": 2000  # Baseline for kelp
+                "mean": 2000
             },
             "SQUID_INK": {
                 "freqs": [3.3333e-07, 6.6667e-07, 1.33333e-06, 1.66667e-06, 2e-06],
                 "amps": [1000241.25709, 732541.88318, 405967.39994, 313508.62736, 272075.38086],
                 "phases": [-1.9551022, -2.52378785, -0.58284677, -1.53594377, -1.40839279],
-                "mean": 2000  # Baseline for squid ink
+                "mean": 2000
             }
         }
-        # Parameter: the baseline order quantity when the price deviation equals the threshold.
+        # ——— New state for difference-based reversion ———
+        self.last_mid: Dict[str, float] = {}     # track last mid-price per product
+        self.price_diffs: Dict[str, List[float]] = {}  # rolling diffs for each product
+        self.max_window = 20                    # how many diffs to keep for rolling stats
+        self.zscore_threshold = 1.5             # only trade if |zscore| >= this
+
         self.base_qty = 1
-        # Parameter: minimal price deviation (in price units) that triggers an order.
-        self.threshold = 5.0
+        self.threshold = 0.0
 
     def load(self, data: dict) -> None:
-        # This strategy doesn't hold dynamic state.
-        pass
+        """
+        Reload saved memory variables, if any, for each product.
+        Example structure in data:
+            {
+              "last_mid": {"RAINFOREST_RESIN": 9995.0, "KELP": ...},
+              "price_diffs": {"RAINFOREST_RESIN": [..], "KELP": [...]}
+            }
+        """
+        if data:
+            self.last_mid = data.get("last_mid", {})
+            self.price_diffs = data.get("price_diffs", {})
 
     def save(self) -> dict:
-        return {}
-    
+        """
+        Save state so that next iteration can retrieve it via load().
+        """
+        return {
+            "last_mid": self.last_mid,
+            "price_diffs": self.price_diffs
+        }
+
     def run_strategy(
         self,
         product: str,
-        order_depth: OrderDepth,
+        order_depth,
         position: int,
         position_limit: int,
         timestamp: int
-    ) -> List[Order]:
-        # Use Fourier reconstruction only if we have coefficients for this product.
+    ) -> List:
+        """
+        1) Reconstruct forecast via Fourier (same as before).
+        2) Compute mid. Then compute and store the price difference from last iteration.
+        3) Compute z-score of that new difference using rolling diffs.
+        4) If mid is below the Fourier forecast *and* the z-score is strongly negative
+           => buy for reversion upward.
+           If mid is above the Fourier forecast *and* the z-score is strongly positive
+           => sell for reversion downward.
+        """
+        # If no Fourier coefficients for product, skip
         if product not in self.coeffs:
             return []
-        coeff = self.coeffs[product]
-        freqs = coeff["freqs"]
-        amps = coeff["amps"]
-        phases = coeff["phases"]
-        mean = coeff["mean"]
-        
-        # Reconstruct the forecast price using the Fourier series
-        t = timestamp  # assume timestamp is in the expected time unit
-        reconstruction = mean
+
+        # (A) Fourier reconstruction as usual
+        c = self.coeffs[product]
+        freqs, amps, phases, mean_val = c["freqs"], c["amps"], c["phases"], c["mean"]
+        t = timestamp
+        reconstruction = mean_val
         for f, a, ph in zip(freqs, amps, phases):
             reconstruction += a * np.cos(2 * np.pi * f * t + ph)
-        
-        # Extract current market mid-price from order_depth
+
+        # (B) Current mid-price from order_depth
         if order_depth.buy_orders and order_depth.sell_orders:
             best_bid = max(order_depth.buy_orders.keys())
             best_ask = min(order_depth.sell_orders.keys())
             mid = (best_bid + best_ask) / 2.0
         else:
-            mid = reconstruction  # fallback if order book data is missing
-        
-        orders: List[Order] = []
-        
-        # Calculate available capacity for orders
-        if mid < reconstruction - self.threshold and position < position_limit:
-            # Expect price to revert upward: generate a buy order.
-            available = position_limit - position   # capacity to buy (long)
-            diff = reconstruction - mid              # positive difference (how far below forecast)
-            # Calculate a scaling factor. If diff equals threshold, scaling=1; if larger, scaling>1.
-            scaling = diff / self.threshold
-            qty = int(min(available, self.base_qty * scaling))
-            qty = max(qty, 1)
+            # fallback if not enough data
+            mid = reconstruction
+
+        # (C) Track rolling diffs and compute z-score
+        #  Initialize if not in dictionary
+        if product not in self.last_mid:
+            self.last_mid[product] = mid
+        if product not in self.price_diffs:
+            self.price_diffs[product] = []
+
+        new_diff = mid - self.last_mid[product]
+        self.last_mid[product] = mid  # update for next time
+
+        # store new_diff
+        diffs_list = self.price_diffs[product]
+        diffs_list.append(new_diff)
+        if len(diffs_list) > self.max_window:
+            diffs_list.pop(0)
+
+        # compute z-score for the *latest* difference
+        if len(diffs_list) >= 2:
+            avg_diff = statistics.mean(diffs_list)
+            std_diff = statistics.pstdev(diffs_list)  # population stdev or sample stdev
+            if std_diff > 1e-9:
+                zscore = (new_diff - avg_diff) / std_diff
+            else:
+                zscore = 0.0
+        else:
+            zscore = 0.0
+
+        # (D) Decide whether to trade
+        orders = []
+        # We want to see if the mid < reconstruction => reversion up,
+        # but also confirm that the last price move (diff) was strongly negative (zscore < -threshold).
+        # That often signals an “overshoot” downward that we want to fade.
+
+        # Similarly, if mid > reconstruction => reversion down,
+        # confirm that the last price move was strongly positive (zscore > threshold).
+
+        # Only trade if we have capacity
+        if mid < reconstruction and zscore < -self.zscore_threshold and position < position_limit:
+            diff = reconstruction - mid
+            # quantity scaled by difference (like your older approach)
+            qty = int(min(position_limit - position, max(1, int(self.base_qty * diff))))
             orders.append(Order(product, round(mid), qty))
-        elif mid > reconstruction + self.threshold and position > -position_limit:
-            # Expect price to revert downward: generate a sell order.
-            available = position + position_limit    # capacity to sell (short)
-            diff = mid - reconstruction                # positive difference (how far above forecast)
-            scaling = diff / self.threshold
-            qty = int(min(available, self.base_qty * scaling))
-            qty = max(qty, 1)
+
+        elif mid > reconstruction and zscore > self.zscore_threshold and position > -position_limit:
+            diff = mid - reconstruction
+            qty = int(min(position + position_limit, max(1, int(self.base_qty * diff))))
             orders.append(Order(product, round(mid), -qty))
-        
+
         return orders
+
 
 # old resin logic - clearly fucked something up 
 
