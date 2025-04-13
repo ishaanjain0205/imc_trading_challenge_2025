@@ -1,4 +1,4 @@
-from datamodel_SAMPLE import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from imc_trading_challenge_2025.ishaan.scrap.datamodel_SAMPLE import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 from typing import List, Dict, Any, Tuple
 import string
 import json

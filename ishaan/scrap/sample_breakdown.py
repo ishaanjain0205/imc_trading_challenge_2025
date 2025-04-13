@@ -1,10 +1,10 @@
-from datamodel_SAMPLE import OrderDepth, UserId, TradingState, Order
+from imc_trading_challenge_2025.ishaan.scrap.datamodel_SAMPLE import OrderDepth, UserId, TradingState, Order
 from typing import List
 import string
-from datamodel_SAMPLE import Listing, OrderDepth, Trade, TradingState
+from imc_trading_challenge_2025.ishaan.scrap.datamodel_SAMPLE import Listing, OrderDepth, Trade, TradingState
 
 # TESTING FILE NAME
-from dynamic_spread_mm import Trader
+from imc_trading_challenge_2025.ishaan.scrap.dynamic_spread_mm import Trader
 # WORK ON THIS FILE
 # RUN FUNCTION => FUNCTION TO MODIFY, EXECUTES OUR TRADES
 
