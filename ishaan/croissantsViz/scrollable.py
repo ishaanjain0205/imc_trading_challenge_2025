@@ -76,7 +76,7 @@ line_mid, = ax.plot(productDf['timestamp'][start:end], productDf['mid_price'][st
 line_vwap, = ax.plot(productDf['timestamp'][start:end], productDf['vwap'][start:end], label='VWAP', color='orange')
 
 # plot VWAP +- X * STD (average variance betwewen mid price and VWAP), X is for multipler so we maximize setting orders at peaks and troughs
-X_vals = [1.0, 1.5, 1.8, 2.0]
+X_vals = [ 1.5, 1.6,1.8, 2.0]
 colors = ['green', 'blue', 'brown','purple']
 upper_lines = []
 lower_lines = []

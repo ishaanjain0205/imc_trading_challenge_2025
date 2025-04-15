@@ -5,7 +5,7 @@ from matplotlib.widgets import Slider
 # VWAP Visualizer
 
 # USER TODO: CHANGE PRODUCT NAME
-product = 'KELP'
+product = 'PICNIC_BASKET2'
 
 # df of mid price
 df = pd.read_csv('prices_round_2_day_-1.csv', delimiter=';')
